@@ -3,6 +3,7 @@ from enum import IntEnum
 from collections import namedtuple
 from math import cos, sin, asin, acos, atan2
 import numpy as np
+from matplotlib import pyplot as plt
 
 class Axis(IntEnum):
     X = 0
@@ -17,7 +18,7 @@ class Axis(IntEnum):
 
 class Manager():
     #  how the system is started up
-    def __init__(self, dt_update):
+    def __init__(self, dt_update, k_torque, k_sing, sigma_lim):
         # Pair[0] produce on X, Z
         # Pair[1] produce on Y, Z
         self.cluster = (Pair(Axis.Y, dt_update), \
@@ -26,9 +27,20 @@ class Manager():
         self.axis_cmn = Axis.Z
         self.dT = dt_update
 
-    def require(self, tau):
+        self.k_torque = k_torque
+        self.k_sing = k_sing
+        self.sigma_lim = sigma_lim
+
+    def require(self, tau_req, V_delta=None):
+        if V_delta:
+            i = 0
+            for pair in self.cluster:
+                for cmg in pair.CMG:
+                    cmg.theta_meas = V_delta[i]
+                    i += 1
+
         
-        V_delta_h_req = tau*self.dT  # the residual momentum to satisfy
+        V_delta_h_req = tau_req*self.dT  # the residual momentum to satisfy
 
         V_delta_h_req_pair = (np.zeros(3), np.zeros(3))
         V_delta_h_req_pair[0][Axis.X] = V_delta_h_req[Axis.X]
@@ -39,24 +51,25 @@ class Manager():
         N_p = 21
         V_alpha = np.linspace(-2, 2, N_p)
         V_rew = np.zeros(N_p)
-        V_delta_h_prod = np.zeros(3, N_p)
+        V_delta_h_prod = np.zeros((3, N_p))
+
+        sigma_fin = np.zeros((2, N_p))
+        delta_fin = np.zeros((2, N_p))
 
         for i, alpha in enumerate(V_alpha):
             V_delta_h_req_pair[0][Axis.Z] = alpha* delta_h_cmn
             V_delta_h_req_pair[1][Axis.Z] = (1-alpha)* delta_h_cmn
 
-            V_delta_H_res = np.zeros(3)
-            sigma_fin = np.array(2, N_p)
-            delta_fin = np.array(2, N_p)
+            V_delta_h_res = np.zeros(3)
             for j, pair in enumerate(self.cluster):
-                delta_H_res, sigma_fin[j][i], delta_fin[j][i]  = pair.require(V_delta_h_req_pair[j])
+                delta_H_res, sigma_fin[j, i], delta_fin[j, i]  = pair.require(V_delta_h_req_pair[j])
                 V_delta_h_res = V_delta_h_res + delta_H_res
 
-            V_delta_h_prod[:, i] = V_delta_h_req - V_delta_H_res
+            V_delta_h_prod[:, i] = V_delta_h_req - V_delta_h_res
 
 
-            V_rew[i] = self.rewardTorque(V_delta_h_req, V_delta_h_prod) + \
-                        self.rewardSing(sigma_fin)
+            V_rew[i] = self.rewardTorque(V_delta_h_req, V_delta_h_prod[:, i]) + \
+                        self.rewardSing(sigma_fin[:, i])
         
         # reward based choice
         i = np.argmax(V_rew)
@@ -65,36 +78,79 @@ class Manager():
         for j, pair in enumerate(self.cluster):
             pair.set(sigma_fin[j, i], delta_fin[j, i])
 
+        V_theta_dot = (self.theta_set-self.theta_meas)/self.dT
+        tau_prod = V_delta_h_prod[:, i] / self.dT
+        m = V_rew[i]
+
+        return V_theta_dot, tau_prod, m 
+    
+    def update(self):
+        for pair in self.cluster:
             pair.update()
 
-        return V_delta_h_prod[:, i]
-    
     def rewardTorque(self, V_delta_h_req, V_delta_h_prod):
         # max value = k
-        k = 1
-        return k* (1 - np.abs(V_delta_h_req - V_delta_h_prod) / np.abs(V_delta_h_req))
+        return self.k_torque* (1 - np.linalg.norm(V_delta_h_req - V_delta_h_prod) / np.linalg.norm(V_delta_h_req))
     
-    def rewardSing(self, sigma_done):
-        # max value = k for sigma
-        k = 1
-        return k* np.sum(np.sin(sigma_done))
+    def rewardSing(self, sigma_fin):
+        sigma_fin = np.abs(sigma_fin)
 
+        sigma_lim = np.pi / 4
+        sigma_in = np.zeros(2)
+        for i, pair in enumerate(self.cluster):
+            sigma_in[i] = np.abs(pair.sigma_meas)
+        
+        d_sigma_max = self.cluster[0].CMG[0].alpha_max
+        d_sigma_norm = (sigma_fin-sigma_in)/d_sigma_max
+
+        cost_delta = np.power((sigma_fin-np.pi/2)/(self.sigma_lim-np.pi/2), 3)
+
+        # max value = k for sigma
+        return self.k_sing* np.sum(cost_delta * d_sigma_norm)
+
+    @property
+    def theta_meas(self):
+        V_theta_meas = np.zeros(4)
+        i = 0
+        for pair in self.cluster:
+            for cmg in pair.CMG:
+                V_theta_meas[i] = cmg.theta_meas
+                i += 1
+
+        return V_theta_meas
+    
+    @property
+    def theta_set(self):
+        V_theta_set = np.zeros(4)
+        i = 0
+        for pair in self.cluster:
+            for cmg in pair.CMG:
+                V_theta_set[i] = cmg.theta_set
+                i += 1
+                
+        return V_theta_set
+
+    @property
+    def H_meas(self):
+        H_meas = np.zeros(3)
+        for pair in self.cluster:
+            H_meas = H_meas + pair.H_meas
+
+        return H_meas
 
 
 class CMG():
-    gb_speed_max = 90
+    gb_speed_max = 2*np.pi/360*90
 
     gb_axis = None
     
     fw_inertia = 1
-    fw_speed_range = np.array([500, 10_000])
-    fw_H_range = fw_inertia * fw_speed_range
+    fw_speed_range = 2*np.pi/60*np.array([500, 10_000])
+
 
     H_plane = None
 
-    Cost = namedtuple('Cost', ['d_theta', 'd_h', 'd_S'])
-
-    def __init__(self, axis: Axis, theta_0, dt_update):
+    def __init__(self, axis: Axis, theta_0, dt_update, omega_fw, I_fw, omega_gb_max):
         self.dT = dt_update
 
         self.gb_axis = axis
@@ -102,23 +158,14 @@ class CMG():
 
         self.theta_meas = theta_0 # measured theta
         self.theta_set = theta_0 # setpoint theta
-        self.fw_H = self.fw_H_range[1]
+
+        self.fw_inertia = I_fw
+        self.fw_speed = omega_fw
+        self.fw_H = I_fw* omega_fw**2
+
+        self.gb_speed_max = omega_gb_max
 
         self.alpha_max = self.gb_speed_max*self.dT
-
-    # we try to set an angle with the goal to make a momentum variation
-    # the actual possible momentum and the variation on the other axis are returned together
-    def set(self, theta_set):
-
-        range_set = (theta_set-self.theta_meas) / self.alpha_max
-        if range_set > 1:
-            self.theta_set = self.theta_meas + self.alpha_max
-        elif range_set < -1:
-            self.theta_set = self.theta_meas - self.alpha_max
-        else:
-            self.theta_set = theta_set
-        
-        return self.delta_H
 
     # gives the momentum variation with the actual setting
     @property
@@ -139,28 +186,21 @@ class CMG():
 class Pair():
     def __init__(self, axis: Axis, dt_update):
         self.CMG = (CMG(axis, 0, dt_update), CMG(axis, np.pi/2, dt_update))
-        self.h = 2*CMG[0].fw_inertia
+        self.h = 2*self.CMG[0].fw_H
 
     def require(self, V_delta_h_req):
 
-        delta_h_req = np.array([ V_delta_h_req[self.H_plane[0]], \
-                                    V_delta_h_req[self.H_plane[1]] ])
-
-        H_req = self.H_meas + delta_h_req
+        H_req = self.v2h_plane(self.H_meas + V_delta_h_req)
 
         # never put H_req[i] > self.h
-        sigma_req = asin(H_req / self.h)
+        sigma_req = asin(np.linalg.norm(H_req) / self.h)
 
         # arctan of Imag [1] and Real [0]
-        delta_req = atan2(H_req[self.H_plane[1]], H_req[self.H_plane[0]])
+        delta_req = atan2(H_req[1], H_req[0])
 
         sigma_done, delta_done = self.checkSaturation(sigma_req, delta_req)
 
-        delta_h_done = self.deltaH_produced(sigma_done, delta_done)
-
-        V_delta_h_done = np.array(3)
-        V_delta_h_done[self.H_plane[0]] = delta_h_done[0]
-        V_delta_h_done[self.H_plane[1]] = delta_h_done[1]
+        V_delta_h_done = self.deltaH_produced(sigma_done, delta_done)
 
         V_delta_h_res = V_delta_h_req - V_delta_h_done
 
@@ -173,6 +213,7 @@ class Pair():
         gamma = self.CMG[0].alpha_max / np.abs(theta_req - self.theta_meas)
 
         gamma = np.min(gamma)
+        if gamma > 1: gamma = 1
 
         theta_done = gamma* theta_req
 
@@ -203,8 +244,12 @@ class Pair():
     def sd2theta(self, sigma, delta):
         theta_0 = sigma + delta
         theta_1 = sigma - delta
-        return np.array(theta_0, theta_1)
+        return np.array([theta_0, theta_1])
     
+    def v2h_plane(self, vect):
+        v_hplane = np.array([vect[self.H_plane[0]], vect[self.H_plane[1]]])
+        return v_hplane
+
     def H(self, sigma, delta):
         H = np.zeros(3)
 
@@ -220,17 +265,19 @@ class Pair():
     def sigma_meas(self):
         sigma_meas = self.CMG[0].theta_meas
         sigma_meas += self.CMG[1].theta_meas
-        return sigma_meas
+
+        return sigma_meas / 2
 
     @property
     def delta_meas(self):
         delta_meas = self.CMG[0].theta_meas
         delta_meas -= self.CMG[1].theta_meas
-        return delta_meas
+
+        return delta_meas / 2
     
     @property
     def theta_meas(self):
-        theta = np.array(self.CMG[0].theta_meas, self.CMG[1].theta_meas)
+        theta = np.array([self.CMG[0].theta_meas, self.CMG[1].theta_meas])
         return theta
     
     @property
@@ -245,14 +292,54 @@ class Pair():
 
     @property
     def H_plane(self):
-        return CMG.H_plane
+        return self.CMG[0].H_plane
     
 
 if __name__ == '__main__':
-    M = Manager(float('1e-3'))
-    tau_sigma = 10/3
-    while True:
+    N_sim = 100
+    V_H_req = np.zeros((3, N_sim))
+    V_H_prod = np.zeros((3, N_sim))
+    V_m = np.zeros((N_sim))
+    dT = float('1e-3')
+    M = Manager(dT)
+    tau_sigma = 500
+    for i in range(N_sim):
         tau_req = np.random.normal(0, tau_sigma, 3)
-        tau_prod = M.require(tau_req)
+
+        V_theta_dot, tau_prod, V_m[i] = M.require(tau_req)
+
+        H_req = M.H_meas + tau_req*M.dT
+        V_H_req[:, i] = H_req
+        H_prod = M.H_meas + tau_prod*M.dT
+        V_H_prod[:, i] = H_prod
+
+        M.update()
+
+    time = M.dT* np.array(range(N_sim))
+
+    fig, axs = plt.subplots(1, 3, figsize=(12, 6))
+    for i in range(3):
+
+        # error plot
+        axs[i].plot(time, V_H_req[i, :], label='H commanded', color='red')
+        axs[i].plot(time, V_H_prod[i, :], label='H produced', color='blue', marker='o', linestyle='--', linewidth=0.2)
+
+
+        plt.legend()
+
+        # axis labels
+        axs[i].set_xlabel('time [s]')
+        axs[i].set_ylabel(f'Torque {Axis(i)}')
+
+        # grid
+        axs[i].grid(True, which='both', linestyle='-', linewidth=0.5)
+
+    fig.savefig(f'Torque.png', format='png', dpi=300)
+
+    plt.show()
+
+
+
+
         
         
