@@ -29,9 +29,6 @@ classdef SAC < Steering
             storeSimData@Steering(obj, delta_dots, delta, i);
         end
 
-        function storeSimData(obj, delta_dots, delta, i)
-            storeSimData@Steering(obj, delta_dots, delta, i);
-        end
     end
 end
 
