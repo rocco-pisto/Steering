@@ -4,12 +4,11 @@ classdef SAC < Steering
     end
 
     methods
-        function obj = SAC(tspan, k_torque_err, k_sing, sigma_sing)
-            structure = 0;
-            m0 = 0;
-            dt_update = 0 % ????
+        function obj = SAC(structure, tspan, k_torque_err, k_sing, sigma_sing, dT)
+            fw_H = structure.h0;
+            gb_alpha_max = structure.max_delta_dot * dT;
             obj@Steering(structure, m0, tspan);
-            obj.sac = py.Mananager(dt_update, k_torque_err, k_sing, sigma_sing);
+            obj.sac = py.Mananager(fw_H, gb_alpha_max, k_torque_err, k_sing, sigma_sing, dT);
 
             % dummy fields to avoid problem of compatibility with the superclass storeSimData
             obj.deter = 0;
