@@ -5,8 +5,67 @@ from math import cos, sin, asin, acos, atan2
 import numpy as np
 from matplotlib import pyplot as plt
 
+class Angle:
+    def __init__(self, value):
+        # Convert the input to a numpy array for consistency
+        self.value = np.asarray(value)
+        self.wraparound()
+
+    def wraparound(self):
+        # Wrap the angle to the range [-π, π)
+        self.value = (self.value + np.pi) % (2 * np.pi) - np.pi
 
 
+
+    def __add__(self, other):
+        # Support addition with another Angle or a numeric type
+        if isinstance(other, Angle):
+            result = self.value + other.value
+        else:
+            result = self.value + other
+        return Angle(result)
+
+    def __sub__(self, other):
+        # Support subtraction with another Angle or a numeric type
+        if isinstance(other, Angle):
+            result = self.value - other.value
+        else:
+            result = self.value - other
+        return Angle(result)
+
+    def __mul__(self, other):
+        # Support multiplication with a numeric type
+        if isinstance(other, (int, float, np.ndarray)):
+            result = self.value * other
+        else:
+            raise TypeError("Multiplication with type other than int, float, or np.ndarray is not supported")
+        return Angle(result)
+
+    def __truediv__(self, other):
+        # Support division with a numeric type
+        if isinstance(other, (int, float, np.ndarray)):
+            result = self.value / other
+        else:
+            raise TypeError("Division with type other than int, float, or np.ndarray is not supported")
+        return Angle(result)
+
+    def __eq__(self, other):
+        # Support equality comparison
+        if isinstance(other, Angle):
+            return np.allclose(self.value, other.value)
+        return False
+
+    def __neg__(self):
+        # Support negation
+        return Angle(-self.value)
+
+    def sin(self):
+        # Calculate the sine of the angle
+        return np.sin(self.value)
+
+    def cos(self):
+        # Calculate the cosine of the angle
+        return np.cos(self.value)
 
 class Axis(IntEnum):
     X = 0
@@ -113,8 +172,8 @@ class Manager():
         
         d_delta_max = self.cluster[0].CMG[0].gb_alpha_max
 
-        delta_fin = Pair.angleReference(delta_in, delta_fin)
-        d_delta_norm = (delta_fin-delta_in)/d_delta_max
+        d_delta = Pair.angleDistance(delta_fin, delta_in)
+        d_delta_norm = np.abs(d_delta)/d_delta_max
 
         # reward given by y = ((x-m)/(p-m))^3
         ## m is the central point: pi/4
@@ -177,13 +236,29 @@ class Pair():
             H_req_norm = self.h
             delta_req = 0
         else:
+            # is in the range [0 , pi/2]
             delta_req = acos( H_req_norm / self.h)
 
         # arctan of Imag [1] (X | Y) and Real [0] (Z)
         sigma_req = atan2(H_req[1], H_req[0])
+        
+        Delta_req = ((delta_req, -delta_req),  (delta_req - np.pi, -delta_req + np.pi))
+        Sigma_req = (sigma_req, sigma_req+np.pi if sigma_req < 0 else sigma_req-np.pi)
+
+        dist_from_meas = np.Inf
+        for i in range(2):
+            for j in range(2):
+                _theta_req = self.sd2theta(Sigma_req[i], Delta_req[i][j])
+                if np.all((_theta_req > -np.pi) & (_theta_req <= np.pi)):
+                    _dist_from_meas = np.sum(np.abs(Pair.angleDistance(_theta_req, self.theta_meas)))
+                    if _dist_from_meas < dist_from_meas:
+                        theta_req = _theta_req
+                        dist_from_meas = _dist_from_meas
+
+        
 
         # gimbal max speed saturation
-        sigma_done, delta_done, theta_done = self.checkSaturation(sigma_req, delta_req)
+        sigma_done, delta_done, theta_done = self.checkSaturation(theta_req)
 
         Delta_H_done = self.deltaH_produced(sigma_done, delta_done)
 
@@ -191,12 +266,7 @@ class Pair():
 
         return Delta_H_res, sigma_done, delta_done, theta_done
     
-    def checkSaturation(self, sigma_req, delta_req):
-        theta_req = self.sd2theta(sigma_req, delta_req)
-        # express theta_req as number to have minimum distance from theta meas
-        # correct also eventualy the theta_0,1 swap
-        theta_req = self.thetaRefMeas(theta_req)
-
+    def checkSaturation(self, theta_req):
         # coefficient to be inside saturation zone with the same direction
         gamma = np.abs(theta_req - self.theta_meas) / self.CMG[0].gb_alpha_max 
 
@@ -229,40 +299,27 @@ class Pair():
 
     @staticmethod
     def theta2sd(theta):
-        sigma = Pair.satAngle((theta[0] + theta[1])/2)
-        delta = Pair.satAngle((theta[0] - theta[1])/2)
-        # we keep delta in [0, pi/2] (cos(delta) in [0, 1]) and sigma in [-pi, pi]
-        # explanation: one degree of fredoom lost beacuse of the irrilevant 
-        # position order
+        sigma = (theta[0] + theta[1])/2
+        delta = (theta[0] - theta[1])/2
 
-        # check if cos(delta) < 0 (II and III quadrant) -> fold back in (I an IV quadrant)
-        if delta <= -np.pi/2:
-            delta = -np.pi - delta
-            sigma = sigma + np.pi
-        elif delta >  np.pi/2:
-            delta = +np.pi - delta
-            sigma = sigma + np.pi
-        
-        # fold II quadrant in I quadrant
-        if delta < 0:
-            delta = -delta
         return sigma, delta
     
     @staticmethod
     def sd2theta(sigma, delta):
-        # this give the two angles in the usual range (-pi, pi]
-        theta_0 = Pair.satAngle(sigma + delta)
-        theta_1 = Pair.satAngle(sigma - delta)
+        theta_0 = sigma + delta
+        theta_1 = sigma - delta
         return np.array((theta_0, theta_1))
     
     @staticmethod
-    def satAngle(theta):
-        while theta > np.pi:
-            theta -= 2*np.pi
-        while theta <= -np.pi:
-            theta += 2*np.pi
+    def angleDistance(theta0, theta1):
+        return Pair.wrapAngle(theta0 - theta1)
 
+    @staticmethod
+    def wrapAngle(theta):
+        '''Wrap angle in range [-π, π)'''
+        theta = (theta + np.pi) % (2 * np.pi) - np.pi
         return theta
+
         
     @staticmethod
     def angleReference(v_theta_ref, v_theta_new):
@@ -277,21 +334,6 @@ class Pair():
             v_theta_ref[i], v_theta_new[i] = theta_ref, theta_new
 
         return v_theta_new
-
-
-    def thetaRefMeas(self, theta_set):
-        theta_meas = self.theta_meas
-
-        theta_set_forw = Pair.angleReference(theta_meas, theta_set)
-        theta_set_back = Pair.angleReference(theta_meas, np.flip(theta_set))
-
-        if np.sum(np.abs(theta_set_forw-theta_meas)) > \
-            np.sum(np.abs(theta_set_back-theta_meas)):
-            theta_set = theta_set_back
-        else:
-            theta_set = theta_set_forw
-
-        return theta_set
 
     
     def cart2h_axis(self, vect):
@@ -366,17 +408,6 @@ class CMG():
         self.gb_alpha_max = gb_alpha_max
 
     def update(self):
-        # on -pi we go back on (-pi, pi] range
-        if self.theta_set > np.pi:
-            self.theta_set -= 2*np.pi
-        elif self.theta_set <= -np.pi:
-            self.theta_set += 2*np.pi
-
-        # keep track on number of revolution
-        elif self.theta_set > 0 and self.theta_meas < 0:
-            self.n_round += 1
-        elif self.theta_set < 0 and self.theta_meas > 0:
-            self.n_round -= 1
 
         self.theta_meas = self.theta_set
         
@@ -413,6 +444,9 @@ if __name__ == '__main__':
     V_m = np.zeros((N_sim))
 
     M = Manager(fw_H, gb_alpha_max, k_torque=1, k_sing=1, sigma_lim=np.pi/8, dT=dT)
+
+
+    ########## random test ##########
     tau_sigma = 2*fw_H*gb_alpha_max / dT
     for i in range(N_sim):
         tau_req = np.random.normal(0, tau_sigma/100, 3)
@@ -426,6 +460,8 @@ if __name__ == '__main__':
 
         M.update()
 
+    ########## limit test ##########
+    
     time = M.dT* np.array(range(N_sim))
 
     fig, axs = plt.subplots(1, 3, figsize=(18, 4))
