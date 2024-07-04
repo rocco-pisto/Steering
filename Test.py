@@ -1,38 +1,38 @@
 import matplotlib.pyplot as plt
 import numpy as np
-import time
 
-# Create an initial array of angles
+# Generate some example data (replace with your actual data)
 theta = np.linspace(0, 2 * np.pi, 100)
+line1_values = np.sin(theta)  # Line 1 data
+line2_values = np.cos(theta)  # Line 2 data
 
-# Create the initial radii array
-r = 1 + 0.5 * np.sin(4 * theta)
+# Create a figure with two polar subplots
+fig, (ax1, ax2) = plt.subplots(1, 2, subplot_kw={'projection': 'polar'})
 
-# Create the figure and polar subplot
-fig, ax = plt.subplots(subplot_kw={'projection': 'polar'})
-line, = ax.plot(theta, r)
+# Define a colormap for the gradient
+cmap = plt.get_cmap('viridis')
 
-# Annotation and arrow placeholders
-z_label = ax.annotate('z', xy=(0, 1), xytext=(0, 1.1), textcoords='data', ha='center', va='center', fontsize=12)
-y_label = ax.annotate('y', xy=(np.pi/2, 1), xytext=(np.pi/2, 1.1), textcoords='data', ha='center', va='center', fontsize=12)
-arrow = ax.annotate('', xy=(0, 1.5), xytext=(0, 0), arrowprops=dict(facecolor='black', shrink=0.05, width=2, headwidth=10))
+# Plot Line 1 with gradient color
+ax1.plot(theta, line1_values, color=cmap(0.0), label='Line 1')
+ax1.set_title('Line 1')
+ax1.set_rticks([])  # Hide radial ticks for cleaner appearance
 
-# Update the plot in a loop
-for i in range(10):
-    # Update the data
-    r = 1 + 0.5 * np.sin(4 * theta + i * np.pi / 10)
-    line.set_ydata(r)
-    
-    # Update annotations (if necessary)
-    z_label.set_position((0, 1.1))
-    y_label.set_position((np.pi/2, 1.1))
-    arrow.xy = (0, 1.5)
-    arrow.xytext = (0, 0)
-    
-    # Redraw the plot
-    plt.draw()
-    
-    # Pause for 1 second
-    plt.pause(1)
+# Plot Line 2 with the same gradient color
+ax2.plot(theta, line2_values, color=cmap(1.0), label='Line 2')
+ax2.set_title('Line 2')
+ax2.set_rticks([])  # Hide radial ticks
 
+# Add a colorbar to show the gradient
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(0.0, 1.0))
+sm.set_array([])  # Dummy array for colorbar
+cbar = plt.colorbar(sm, ax=[ax1, ax2], location='bottom')
+cbar.set_label('Gradient')
+
+# Customize the legend
+for ax in [ax1, ax2]:
+    ax.legend(loc='upper right')
+
+# Set the overall title
+plt.suptitle('Gradient-Colored Lines on Polar Subplots')
+plt.tight_layout()
 plt.show()
