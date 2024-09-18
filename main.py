@@ -2,136 +2,104 @@ from SAC import *
 
 if __name__ == '__main__':
     dT = float('1e-1')
-    fw_H = 1
-
-    gb_omega_max = 2*np.pi/360 * 90
-    gb_alpha_max = gb_omega_max*dT
 
     N_sim = 35
     time = dT* np.array(range(N_sim))
 
-    V_H_req = np.zeros((3, N_sim))
-    V_H_prod = np.zeros((3, N_sim))
+    V_tau_req = np.zeros((3, N_sim))
+    V_theta_dot = np.zeros((2, 2, N_sim))
+    V_tau_prod = np.zeros((3, N_sim))
+    V_H_pair = np.zeros((N_sim, 2, 2))
+    V_H_pair_abs = np.zeros((N_sim, 2))
+    V_H_pair_ph = np.zeros((N_sim, 2))
     V_m = np.zeros((N_sim))
 
-    M = Manager(fw_H, gb_alpha_max, k_torque=50, k_sing=50, delta_lim=1/64, dT=dT)
+
+    M = RDCP(skew=45, k_torque=100, delta_unit_cost=5, dt=dT)
+    M.v_theta_set = np.array(((90, -90), (90, -90)))
 
     test_n = 2
 
-    if test_n == 1:
-    ########## random test ##########
-        tau_sigma = 2*fw_H*gb_alpha_max / dT
-        for i in range(N_sim):
-            tau_req = np.random.normal(0, tau_sigma/100, 3)
+    tau_sigma = Pair.d_H_max / dT
+    tau_req = np.zeros(3)
+    for i in range(N_sim):
+        ########## random test ##########
+        if test_n == 1:
+            tau_req = np.random.normal(0, tau_sigma/10, 3)
+        elif test_n == 2:
+            tau_req[Rooftop.X] = 0
+            tau_req[Rooftop.Y] = 0
+            tau_req[Rooftop.Z] = tau_sigma / 2
 
-            V_theta_dot, tau_prod, V_m[i] = M.require(tau_req)
+        V_tau_req[:, i] = tau_req
+        V_theta_dot[:, :, i], V_tau_prod[:, i], V_m[i] = M.require(tau_req, None)
 
-            H_req = M.H_meas + tau_req*M.dT
-            V_H_req[:, i] = H_req
-            H_prod = M.H_meas + tau_prod*M.dT
-            V_H_prod[:, i] = H_prod
+        for p in range(2):
+            V_H_pair[i, :, p] = M.Pair[p].H_meas
+    
+    for p in range(2):
+        V_H_pair_abs[:, p]  = np.linalg.norm(V_H_pair[:, :, p], ord=2, axis=1) / Pair.h
+        V_H_pair_ph[:, p]   = np.arctan2(
+                                V_H_pair[:, Rooftop.IM, p], \
+                                V_H_pair[:, Rooftop.RE, p])
+        
+    ######## PLOT TORQUE
+    fig0, axs = plt.subplots(1, 3, figsize=(18, 4))
+    for i in range(3):
 
-            M.update()
-            
+        # error plot
+        axs[i].plot(time, V_tau_req[i, :], label='H commanded', color='red')
+        axs[i].plot(time, V_tau_prod[i, :], label='H produced', color='blue', marker='o', linestyle='--', linewidth=0.2)
 
-        fig0, axs = plt.subplots(1, 3, figsize=(18, 4))
-        for i in range(3):
+        # axis labels
+        axs[i].set_xlabel('time [s]')
+        axs[i].set_ylabel(f'Torque')
+
+        # grid
+        axs[i].grid(True, which='both', linestyle='-', linewidth=0.5)
+
+        axs[i].legend()
+
+    fig0.savefig(f'Torque.png', format='png', dpi=300)
+
+    ######## PLOT GB_RATES
+    fig1, axs = plt.subplots(2, 2, figsize=(10, 10))
+    for i in range(2):
+        for j in range(2):
 
             # error plot
-            axs[i].plot(time, V_H_req[i, :], label='H commanded', color='red')
-            axs[i].plot(time, V_H_prod[i, :], label='H produced', color='blue', marker='o', linestyle='--', linewidth=0.2)
+            axs[i, j].plot(time, V_theta_dot[i, j, :], label=f'PAIR {i} - CMG {j}', color='black')
 
 
-            plt.legend()
 
             # axis labels
-            axs[i].set_xlabel('time [s]')
-            axs[i].set_ylabel(f'Torque {Axis(i)}')
+            axs[i, j].set_xlabel('time [s]')
+            axs[i, j].set_ylabel(f'GB RATE [deg/s]')
 
             # grid
-            axs[i].grid(True, which='both', linestyle='-', linewidth=0.5)
+            axs[i, j].grid(True, which='both', linestyle='-', linewidth=0.5)
 
-        fig0.savefig(f'Torque_Rand.png', format='png', dpi=300)
-
-        plt.show()
-
-    elif test_n == 2:
-    ########## limit test ##########
-        # Create a figure with two subplots arranged horizontally
-        fig0, (ax0, ax1) = plt.subplots(1, 2, subplot_kw={'projection': 'polar'}, figsize=(12, 6))
+            axs[i, j].legend()
 
 
-        # enable update figure
-        # plt.ion()
+    fig1.savefig(f'GB_Rate.png', format='png', dpi=300)
 
-        # Plot Pair 0
-        # line0, = ax0.plot(0, 0)
-        # ax0.annotate('z', xy=(0, 0), xytext=(0, 1.1), textcoords='data', ha='center', va='center', fontsize=12)
-        # ax0.annotate('', xy=(0, 1), xytext=(0, 0), arrowprops=dict(facecolor='black', shrink=0.05, width=2, headwidth=10))
-        # ax0.annotate('x', xy=(0, 0), xytext=(np.pi/2, 1.1), textcoords='data', ha='center', va='center', fontsize=12)
-        # ax0.annotate('', xy=(np.pi/2, 1), xytext=(0, 0), arrowprops=dict(facecolor='black', shrink=0.05, width=2, headwidth=10))
-        ax0.set_title("PAIR 0 : (x, z)")
-        ax0.set_ylim([0, 1])
+    ######## PLOT PAIRS COMPLEX PLANE
+    fig2, axs = plt.subplots(1, 2, subplot_kw={'projection': 'polar'}, figsize=(12, 6))
 
-        # Plot Pair 1
-        # line1, = ax1.plot(0, 0)
-        # ax1.annotate('z', xy=(0, 0), xytext=(0, 1.1), textcoords='data', ha='center', va='center', fontsize=12)
-        # ax1.annotate('', xy=(0, 1), xytext=(0, 0), arrowprops=dict(facecolor='black', shrink=0.05, width=2, headwidth=10))
-        # ax1.annotate('y', xy=(0, 0), xytext=(np.pi/2, 1.1), textcoords='data', ha='center', va='center', fontsize=12)
-        # ax1.annotate('', xy=(np.pi/2, 1), xytext=(0, 0), arrowprops=dict(facecolor='black', shrink=0.05, width=2, headwidth=10))
-        ax1.set_title("PAIR 1 : (y, z)")
-        ax1.set_ylim([0, 1])
+    axs[0].set_title("PAIR 0 : (X, U)")
+    axs[0].set_ylim([0, 1])
 
-        # plt.tight_layout()
+    axs[1].set_title("PAIR 1 : (X, V)")
+    axs[1].set_ylim([0, 1])
 
-        H_meas_pair_abs = np.zeros((2, N_sim))
-        H_meas_pair_ph = np.zeros((2, N_sim))
-        tau_res_norm = np.zeros((3, N_sim))
-        tau_sigma = 2*fw_H*gb_alpha_max / dT /3
-        for i in range(N_sim):
-            tau_req = np.array((0, 0, tau_sigma))
+    for p in range(2):
+        line, = axs[p].plot(V_H_pair_ph[:, p], V_H_pair_abs[:, p])
 
-            V_theta_dot, tau_prod, V_m[i] = M.require(tau_req)
+        axs[p].scatter(V_H_pair_ph[0,p],    V_H_pair_abs[0,p],      marker='s')
+        axs[p].scatter(V_H_pair_ph[-1,p],   V_H_pair_abs[-1,p],     marker='o')
+        axs[p].scatter(V_H_pair_ph[1:-1,p], V_H_pair_abs[1:-1,p],   marker='.')
 
-            tau_res_norm[:, i] = 100* abs(tau_prod-tau_req) / abs(tau_req)
+    fig2.savefig(f'Pairs_Complex.png', format='png', dpi=300)
 
-            M.update()
-
-            for j, pair in enumerate(M.Pair):
-                H_meas_pair_3v = pair.H_meas
-                H_meas_pair= np.array((H_meas_pair_3v[pair.H_axis.Real], H_meas_pair_3v[pair.H_axis.Imag]))
-                print(f'PAIR {j}: {H_meas_pair[0]}')
-                H_meas_pair_abs[j, i] = np.linalg.norm(H_meas_pair) / pair.h
-                H_meas_pair_ph[j, i] = np.arctan2(H_meas_pair[1], H_meas_pair[0])
-
-            print('\n')
-
-            # line0.set_xdata(H_meas_pair_ph[0, 0:i])
-            # line0.set_ydata(H_meas_pair_abs[0, 0:i])
-
-            # line1.set_xdata(H_meas_pair_ph[1, 0:i])
-            # line1.set_ydata(H_meas_pair_abs[1, 0:i])
-
-            # fig.canvas.draw()
-            # fig.canvas.flush_events()
-
-            # plt.pause(0.5)
-
-        line0, = ax0.plot(H_meas_pair_ph[0,:], H_meas_pair_abs[0,:])
-        line1, = ax1.plot(H_meas_pair_ph[1,:], H_meas_pair_abs[1,:])
-
-        ax0.scatter(H_meas_pair_ph[0,0], H_meas_pair_abs[0,0], marker='s')
-        ax0.scatter(H_meas_pair_ph[0,-1], H_meas_pair_abs[0,-1], marker='o')
-        ax0.scatter(H_meas_pair_ph[0,1:-1], H_meas_pair_abs[0,1:-1], marker='.')
-
-        ax1.scatter(H_meas_pair_ph[1,0], H_meas_pair_abs[1,0], marker='s')
-        ax1.scatter(H_meas_pair_ph[1,-1], H_meas_pair_abs[1,-1], marker='o')
-        ax1.scatter(H_meas_pair_ph[1,1:-1], H_meas_pair_abs[1,1:-1], marker='.')
-
-        plt.figure(2)
-        plt.plot(time, V_m)
-        plt.figure(3)
-        plt.plot(time, tau_res_norm[2,:])
-        
-        plt.show()
-        
+    plt.show()
