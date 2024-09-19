@@ -188,6 +188,7 @@ class Pair():
 
     fact_deg2range = 1/180 # factor to transform angle from [0, 360] -> [0, 2]
     fact_rad2range = 1/np.pi # factor to transform angle from [0, 2*pi] -> [0, 2]
+    ext_th = 0.95
 
     def __init__(self, theta_0, theta_1):
         '''Set initial angle [degrees]'''
@@ -227,15 +228,15 @@ class Pair():
         H_req_norm = np.linalg.norm(H_req)
         # external singularity (delta = 0)
         
-        if H_req_norm > self.h:
-            H_req_norm = self.h
+        if H_req_norm > Pair.ext_th*self.h:
+            H_req_norm = Pair.ext_th*self.h
             # flywheel Momentum parallel same sign
-            delta_req = 0
+            delta_req = Pair.fact_rad2range * acos( Pair.ext_th)
         else:
-            delta_req = 1/np.pi * acos( H_req_norm / self.h) # range [0 , 1]
+            delta_req = Pair.fact_rad2range * acos( H_req_norm / self.h) # range [0 , 1]
 
         # arctan of Imag [1] (U | V) and Real [0] (Z)
-        sigma_req = 1/np.pi * atan2(H_req[1], H_req[0]) # range (-1, 1]
+        sigma_req = Pair.fact_rad2range * atan2(H_req[1], H_req[0]) # range (-1, 1]
         
         Sigma_req = np.array((sigma_req, sigma_req+1))
         Delta_req = np.array(((delta_req, -delta_req), (delta_req+1, -delta_req+1)))
